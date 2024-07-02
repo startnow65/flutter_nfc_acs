@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_nfc_acs/models.dart';
@@ -13,6 +14,7 @@ class FlutterNfcAcs {
   // _channel's commands
   static const String CONNECT = 'CONNECT';
   static const String DISCONNECT = 'DISCONNECT';
+  static const String SEND_APDU = 'SEND_APDU';
 
   // The _deviceStatusChannel's outputs
   static const String CONNECTED = "CONNECTED";
@@ -69,5 +71,10 @@ class FlutterNfcAcs {
 
   static Future<void> disconnect() {
     return _channel.invokeMethod(DISCONNECT);
+  }
+
+  static Future<void> sendApdu(String data) {
+    print('would send encoded apdu command: $data');
+    return _channel.invokeMethod(SEND_APDU, {'data': data});
   }
 }

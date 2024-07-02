@@ -40,12 +40,14 @@ public class FlutterNfcAcsPlugin extends BluetoothPermissions implements Flutter
   // The method channel's commands
   private static final String CONNECT = "CONNECT";
   private static final String DISCONNECT = "DISCONNECT";
+  private static final String SEND_APDU = "SEND_APDU";
 
   // Error codes
   // TODO: Figure out how to transmit errors that are detected in listeners.
   // static final String ERROR_NO_BLUETOOTH_MANAGER = "no_bluetooth_manager";
   // static final String ERROR_GATT_CONNECTION_FAILED = "gatt_connection_failed";
   private static final String ERROR_MISSING_ADDRESS = "missing_address";
+  private static final String ERROR_MISSING_APDU_COMMAND = "missing_apdu_command";
   private static final String ERROR_DEVICE_NOT_FOUND = "device_not_found";
   private static final String ERROR_DEVICE_NOT_SUPPORTED = "device_not_supported";
   static final String ERROR_NO_PERMISSIONS = "no_permissions";
@@ -176,8 +178,47 @@ public class FlutterNfcAcsPlugin extends BluetoothPermissions implements Flutter
         disconnectFromReader();
         new Handler(Looper.getMainLooper()).post(() -> result.success(null));
         break;
+
+      case SEND_APDU:
+        if (!hasPermissions()) {
+          requestPermissions();
+          return;
+        }
+
+        doSendApdu(call, result);
+        break;
       default:
     }
+  }
+
+  private void doSendApdu(@NonNull MethodCall call, @NonNull MethodChannel.Result result) {
+    String encodedString = call.argument("data");
+    if (encodedString == null) {
+      new Handler(Looper.getMainLooper()).post(() -> result.error(ERROR_MISSING_APDU_COMMAND, "The apdu command argument cannot be null", null));
+      return;
+    }
+
+    String[] parts = encodedString.split("\\|");
+    if (parts.length == 1) {
+      Log.i(TAG, "Decoding: " +  encodedString);
+      final byte[] decoded = android.util.Base64.decode(encodedString, android.util.Base64.DEFAULT);
+      Log.i(TAG, "byte array size " +  decoded.length);
+      cardStreamHandler.sendApdu(decoded);
+    }
+
+    if (parts.length > 1) {
+      byte[][] data = new byte[parts.length][];
+
+      for (int c = 0; c < parts.length; c++) {
+        Log.i(TAG, "Decoding: " +  parts[c]);
+        data[c] = android.util.Base64.decode(parts[c], android.util.Base64.DEFAULT);
+        Log.i(TAG, "byte array size " +  data[c].length);
+      }
+
+      cardStreamHandler.sendMultipleApduWithMergedResult(data);
+    }
+
+    new Handler(Looper.getMainLooper()).post(() -> result.success(null));
   }
 
   // Emits status events on listen
@@ -230,6 +271,9 @@ public class FlutterNfcAcsPlugin extends BluetoothPermissions implements Flutter
               pendingResult.success(null);
             }
           });
+          break;
+        case SEND_APDU:
+          doSendApdu(pendingMethodCall, pendingResult);
           break;
         default:
       }

@@ -24,6 +24,11 @@ class CardStreamHandler implements EventChannel.StreamHandler {
   private static final String requestCardId = "FFCA000000";
   private BluetoothReader reader;
   private EventChannel.EventSink events;
+  private byte[] apduToSend;
+  private String apduResponse = "";
+  private byte[][] multipleApduToSend;
+  private int expectedApduResponseCount = 0;
+  private int cardStatus = -1;
 
   void setReader(final BluetoothReader reader) {
     if (reader instanceof Acr1255uj1Reader) {
@@ -33,10 +38,26 @@ class CardStreamHandler implements EventChannel.StreamHandler {
         if (errorCode == BluetoothReader.ERROR_SUCCESS) {
           new Handler(Looper.getMainLooper()).post(() -> {
             if (events != null) {
-              events.success(Utils.toHexString(Arrays.copyOf(response, response.length - 2)).trim());
+              final String responseStr = Utils.toHexString(Arrays.copyOf(response, response.length - 2)).trim();
+              this.apduResponse = this.apduResponse == "" ? responseStr : (this.apduResponse + " " + responseStr);
+              this.expectedApduResponseCount--;
+              Log.i(TAG, "Received response: " + responseStr + ". " + this.expectedApduResponseCount + " more to go");
+
+              if (this.expectedApduResponseCount <= 0) {
+                this.multipleApduToSend = null;
+                events.success(this.apduResponse);
+                this.apduResponse = "";
+                return;
+              }
+
+              final byte[] command = this.multipleApduToSend[this.multipleApduToSend.length - this.expectedApduResponseCount];
+              Log.i(TAG, "Sending next command: " + Utils.toHexString(command));
+              reader.transmitApdu(command);
             }
           });
         } else {
+          this.expectedApduResponseCount = 0;
+          this.multipleApduToSend = null;
           new Handler(Looper.getMainLooper()).post(() -> {
             if (events != null) {
               events.error("unknown_reader_error", String.valueOf(errorCode), null);
@@ -46,10 +67,25 @@ class CardStreamHandler implements EventChannel.StreamHandler {
       });
 
       reader.setOnCardStatusChangeListener((bluetoothReader, cardStatusCode) -> {
+        this.cardStatus = cardStatusCode;
         Log.i(TAG, "Card status: " + getCardStatusString(cardStatusCode));
-        if (cardStatusCode == BluetoothReader.CARD_STATUS_PRESENT) {
-          bluetoothReader.transmitApdu(Utils.hexStringToByteArray(requestCardId));
+        if (cardStatusCode != BluetoothReader.CARD_STATUS_PRESENT) return;
+
+        if (multipleApduToSend != null) {
+          this.startMultipleApduSend(bluetoothReader);
+          return;
         }
+
+        if (apduToSend == null) {
+          Log.i(TAG, "Requesting card ID");
+          bluetoothReader.transmitApdu(Utils.hexStringToByteArray(requestCardId));
+          return;
+        }
+
+        this.expectedApduResponseCount = 1;
+        Log.i(TAG, "Sending APDU command");
+        bluetoothReader.transmitApdu(apduToSend);
+        apduToSend = null;
       });
     } else {
       Log.i(TAG, "Card stream not supported for this device");
@@ -85,6 +121,25 @@ class CardStreamHandler implements EventChannel.StreamHandler {
   @Override
   public void onCancel(Object arguments) {
     dispose();
+  }
+
+  void sendApdu(byte[] data) {
+    this.apduToSend = data;
+  }
+
+  private void startMultipleApduSend(BluetoothReader reader) {
+    Log.i(TAG, "Sending multiple APDU commands");
+    this.apduResponse = "";
+    Log.i(TAG, "Sending command: " + Utils.toHexString(this.multipleApduToSend[0]));
+    reader.transmitApdu(this.multipleApduToSend[0]);
+  }
+
+  void sendMultipleApduWithMergedResult(byte[][] data) {
+    this.apduToSend = null;
+    this.multipleApduToSend = data;
+    this.expectedApduResponseCount = data.length;
+
+    if (this.cardStatus == BluetoothReader.CARD_STATUS_PRESENT) this.startMultipleApduSend(this.reader);
   }
 
   void dispose() {
